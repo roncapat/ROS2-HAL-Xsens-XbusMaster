@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+
+import time
+import rclpy
+from rclpy.node import Node
+import numpy as np
+import sys
+import math
+from std_msgs.msg import Header
+from sensor_msgs.msg import Imu, MagneticField
+
+import os
+
+from hal_xsens_xmb import xsens_XMB
+
+# Class definition fo the estimator
+class IMU_Node(Node):
+    def __init__(self):
+        super().__init__("xsens_imu_node")
+
+        self.imu = xsens_XMB.HAL()
+
+        if not self.imu.init(xsens_XMB.Mode.CalibratedData, "/dev/rfcomm0"):
+            sys.exit(1)
+        
+        self.slaves_n = self.imu.get_slaves_number()
+
+        self.rotvel = np.zeros((self.slaves_n, 3), dtype=np.float32)
+        self.linacc = np.zeros((self.slaves_n, 3), dtype=np.float32)
+        self.magfld = np.zeros((self.slaves_n, 3), dtype=np.float32)
+        
+        # Publishers
+        self.imu_pub = [None] * self.slaves_n
+        self.mag_pub = [None] * self.slaves_n
+        for i in range(0, self.slaves_n):
+            self.imu_pub[i] = self.create_publisher(Imu, f"/imu_{i}/data", 10)
+            self.mag_pub[i] = self.create_publisher(MagneticField, f"/imu_{i}/magnetic", 10)
+
+        self.timer = self.create_timer(0.01, self.publish_status)
+
+
+    # Publisher function
+    def publish_status(self):
+
+        self.imu.get_gyro_acc_mag(self.rotvel, self.linacc, self.magfld)
+        
+        msg = Imu()
+
+        msg.header = Header()
+        msg.header.stamp = self.get_clock().now().to_msg()
+
+        msg.orientation.x = 0.0
+        msg.orientation.y = 0.0
+        msg.orientation.z = 0.0
+        msg.orientation.w = 0.0
+
+        msg.orientation_covariance[0] = 0.01745
+        msg.orientation_covariance[4] = 0.01745
+        msg.orientation_covariance[8] = 0.15708
+        msg.angular_velocity_covariance[0] = 0.0004
+        msg.angular_velocity_covariance[4] = 0.0004
+        msg.angular_velocity_covariance[8] = 0.0004
+        msg.linear_acceleration_covariance[0] = 0.0004
+        msg.linear_acceleration_covariance[4] = 0.0004
+        msg.linear_acceleration_covariance[8] = 0.0004
+
+        for i in range(0, self.slaves_n):
+            msg.header.frame_id = "imu_link"
+
+            msg.angular_velocity.x = float(self.rotvel[i][0])
+            msg.angular_velocity.y = float(self.rotvel[i][1])
+            msg.angular_velocity.z = float(self.rotvel[i][2])
+
+            msg.linear_acceleration.x = float(self.linacc[i][0])
+            msg.linear_acceleration.y = float(self.linacc[i][1])
+            msg.linear_acceleration.z = float(self.linacc[i][2])
+
+            self.imu_pub[i].publish(msg)
+
+        '''
+        mag_msg = MagneticField()
+
+        mag_msg.header = Header()
+        mag_msg.header.stamp = self.get_clock().now().to_msg()
+        mag_msg.header.frame_id = "imu_mag_link"
+
+        mag_msg.magnetic_field.x = float(self.magfld[0])
+        mag_msg.magnetic_field.y = float(self.magfld[1])
+        mag_msg.magnetic_field.z = float(self.magfld[2])
+
+        mag_msg.magnetic_field_covariance[0] = 0.1
+        mag_msg.magnetic_field_covariance[4] = 0.1
+        mag_msg.magnetic_field_covariance[8] = 0.1
+
+        self.mag_pub.publish(mag_msg)
+        '''
+
+
+# Main loop function
+def main(args=None):
+
+    rclpy.init(args=args)
+    node = IMU_Node()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        print('Xsens IMU Node stopped cleanly')
+    except BaseException:
+        print('Exception in Xsens IMU Node:', file=sys.stderr)
+        raise
+    finally:
+        # Destroy the node explicitly
+        # (optional - Done automatically when node is garbage collected)
+        node.destroy_node()
+        rclpy.shutdown()
+
+# Main
+if __name__ == '__main__':
+    main()
